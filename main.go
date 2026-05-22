@@ -62,7 +62,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("CORTEX ONLINE"))
+		w.Write([]byte("CORTEX ONLINE.."))
 	})
 
 	port := os.Getenv("PORT")

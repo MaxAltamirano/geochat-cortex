@@ -61,7 +61,16 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
+
+	// En tu main.go, modifica el mux para capturar el POST del despertar
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			// Aquí recibirás el ADN enviado por el despertar.sh
+			// Puedes guardar el body en tu cromosoma_01.json
+			fmt.Println("🧬 ADN RECIBIDO DESDE EL DESPERTAR")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		w.Write([]byte("CORTEX ONLINE.."))
 	})
 

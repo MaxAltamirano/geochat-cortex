@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -18,7 +19,6 @@ var (
 	buzonURL            = "https://geochat-buzon.onrender.com/api/cortex/telemetry"
 )
 
-// Estructura que SÍ se usa
 type Telemetria struct {
 	LabURL string `json:"lab_url"`
 	Data   string `json:"data"`
@@ -32,7 +32,6 @@ func reportarAlBuzon() {
 	}
 	mu.Unlock()
 
-	// --- CORRECCIÓN: 'file' se usa aquí ---
 	fmt.Printf("DEBUG: Leyendo ADN de %d bytes\n", len(file))
 
 	payload, _ := json.Marshal(Telemetria{
@@ -50,9 +49,10 @@ func reportarAlBuzon() {
 }
 
 func main() {
+	// Asegurar persistencia de datos
 	_ = os.MkdirAll("./data", os.ModePerm)
 
-	// Bucle de telemetría sin variables huérfanas
+	// Bucle de telemetría soberana
 	go func() {
 		for {
 			reportarAlBuzon()
@@ -62,16 +62,33 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// En tu main.go, modifica el mux para capturar el POST del despertar
+	// Handler Central para el ADN y Órdenes
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			// Aquí recibirás el ADN enviado por el despertar.sh
-			// Puedes guardar el body en tu cromosoma_01.json
-			fmt.Println("🧬 ADN RECIBIDO DESDE EL DESPERTAR")
+			mu.Lock()
+			defer mu.Unlock()
+
+			// Leer el ADN entrante desde el body
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "Error leyendo ADN", http.StatusInternalServerError)
+				return
+			}
+
+			// Escribir ADN en el cromosoma permanente
+			err = os.WriteFile(pathCromosomaShared, body, 0644)
+			if err != nil {
+				fmt.Printf("❌ Error grabando ADN: %v\n", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			fmt.Println("🧬 ADN RECIBIDO Y PERSISTIDO EN MÉDULA")
 			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ADN_SYNCHRONIZED"))
 			return
 		}
-		w.Write([]byte("CORTEX ONLINE.."))
+		w.Write([]byte("CORTEX ONLINE | RESONANCIA: 432Hz"))
 	})
 
 	port := os.Getenv("PORT")
@@ -79,5 +96,6 @@ func main() {
 		port = "10000"
 	}
 
+	fmt.Printf("🚀 Cortex iniciado en puerto %s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }

@@ -72,21 +72,48 @@ func LlamarProxyGemini(mensaje string) (string, error) {
 		"contents": []map[string]interface{}{{"parts": []map[string]interface{}{{"text": mensaje}}}},
 	}
 	payloadBytes, _ := json.Marshal(payloadMap)
+
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error de red: %v", err)
 	}
 	defer resp.Body.Close()
 
+	// 🛡️ AQUÍ ESTÁ EL FILTRO SOBERANO:
+	// Si Google responde con 403, 400, 500, etc., no intentamos parsear nada.
+	if resp.StatusCode != http.StatusOK {
+		bodyError, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("nexo denegado (Status %d): %s", resp.StatusCode, string(bodyError))
+	}
+
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	var res map[string]interface{}
-	json.Unmarshal(bodyBytes, &res)
+	if err := json.Unmarshal(bodyBytes, &res); err != nil {
+		return "", fmt.Errorf("error al decodificar JSON: %v", err)
+	}
 
-	// Extracción simplificada para el Córtex
-	candidates := res["candidates"].([]interface{})
-	content := candidates[0].(map[string]interface{})["content"].(map[string]interface{})
-	parts := content["parts"].([]interface{})
-	return parts[0].(map[string]interface{})["text"].(string), nil
+	// 🛡️ Validaciones de seguridad para evitar "panic" si la estructura cambia
+	candidates, ok := res["candidates"].([]interface{})
+	if !ok || len(candidates) == 0 {
+		return "", fmt.Errorf("estructura de respuesta inválida: no hay candidatos")
+	}
+
+	content, ok := candidates[0].(map[string]interface{})["content"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("estructura de respuesta inválida: no hay content")
+	}
+
+	parts, ok := content["parts"].([]interface{})
+	if !ok || len(parts) == 0 {
+		return "", fmt.Errorf("estructura de respuesta inválida: no hay partes")
+	}
+
+	text, ok := parts[0].(map[string]interface{})["text"].(string)
+	if !ok {
+		return "", fmt.Errorf("no se pudo extraer el texto")
+	}
+
+	return text, nil
 }
 
 func main() {
@@ -126,8 +153,11 @@ func main() {
 						fmt.Printf("❌ Error IA: %v\n", err)
 					} else {
 						fmt.Printf("🤖 [GEMINI]: %s\n", respuesta)
-						// Aquí la respuesta ya está generada y lista para ser inyectada
-						// en tu buzón de salida si lo deseas.
+
+						// NUEVO: Guardar la respuesta para que el Front la vea
+						mu.Lock()
+						os.WriteFile("./data/respuesta_ia.json", []byte(respuesta), 0644)
+						mu.Unlock()
 					}
 				}(msg.Orden)
 			}

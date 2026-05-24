@@ -116,10 +116,45 @@ func LlamarProxyGemini(mensaje string) (string, error) {
 	return text, nil
 }
 
+func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Solo POST permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, _ := io.ReadAll(r.Body)
+
+	// Persistencia
+	mu.Lock()
+	os.WriteFile(pathCromosomaShared, body, 0644)
+	mu.Unlock()
+
+	var msg struct {
+		Orden string `json:"orden"`
+	}
+
+	if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
+		go func(orden string) {
+			respuesta, err := LlamarProxyGemini(orden)
+			if err != nil {
+				fmt.Printf("❌ Error IA: %v\n", err)
+				return // Aquí es donde evitamos guardar el error 403
+			}
+			// Solo si no hay error, guardamos la respuesta
+			mu.Lock()
+			os.WriteFile("./data/respuesta_ia.json", []byte(respuesta), 0644)
+			mu.Unlock()
+		}(msg.Orden)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ADN_SYNCHRONIZED"))
+}
+
 func main() {
 	_ = os.MkdirAll("./data", os.ModePerm)
 
-	// Hilo 1: Telemetría ajustada a 60 segundos
+	// Hilo 1: Telemetría
 	go func() {
 		for {
 			reportarAlBuzon()
@@ -127,45 +162,27 @@ func main() {
 		}
 	}()
 
-	// Hilo 2: Guardián de Conectividad
+	// Hilo 2: Guardián
 	go monitorTunelSoberano()
 
 	mux := http.NewServeMux()
+
+	// 1. RUTA ÚNICA Y SEGURA
+	// Ahora usamos la función que SÍ filtra los errores (RecibirOrdenSoberana)
+	mux.HandleFunc("/api/cortex/recibir-orden", RecibirOrdenSoberana)
+
+	// 2. RUTA DE LIMPIEZA (Nueva)
+	mux.HandleFunc("/api/buzon/limpiar", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		os.Remove(pathCromosomaShared)
+		os.Remove("./data/respuesta_ia.json")
+		mu.Unlock()
+		fmt.Println("🧹 [CORTEX]: Archivos de estado purgados.")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 3. RUTA RAÍZ (Solo informativa)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			body, _ := io.ReadAll(r.Body)
-
-			// 1. Persistencia Inmediata
-			mu.Lock()
-			os.WriteFile(pathCromosomaShared, body, 0644)
-			mu.Unlock()
-
-			fmt.Println("🧬 ADN RECIBIDO Y PERSISTIDO")
-
-			// 2. Sistema Nervioso: Activación de IA en segundo plano
-			var msg struct {
-				Orden string `json:"orden"`
-			}
-			if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
-				go func(orden string) {
-					respuesta, err := LlamarProxyGemini(orden)
-					if err != nil {
-						fmt.Printf("❌ Error IA: %v\n", err)
-					} else {
-						fmt.Printf("🤖 [GEMINI]: %s\n", respuesta)
-
-						// NUEVO: Guardar la respuesta para que el Front la vea
-						mu.Lock()
-						os.WriteFile("./data/respuesta_ia.json", []byte(respuesta), 0644)
-						mu.Unlock()
-					}
-				}(msg.Orden)
-			}
-
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ADN_SYNCHRONIZED"))
-			return
-		}
 		w.Write([]byte("CORTEX ONLINE | RESONANCIA: 432Hz"))
 	})
 
@@ -177,3 +194,4 @@ func main() {
 	fmt.Printf("🚀 Cortex Autónomo iniciado en puerto %s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
+

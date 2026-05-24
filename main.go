@@ -27,20 +27,34 @@ type Telemetria struct {
 
 // Guardián del Túnel: Monitorea la salida al exterior
 func monitorTunelSoberano() {
-	for {
-		resp, err := http.Get("http://localhost:10000")
-		if err != nil {
-			fmt.Println("🛰️ [ALERTA]: Túnel caído. Auto-reparando...")
-			cmd := exec.Command("ssh", "-R", "80:localhost:10000", "serveo.net")
-			err := cmd.Start()
-			if err != nil {
-				fmt.Printf("❌ Error en auto-reparación: %v\n", err)
-			}
-		} else {
-			resp.Body.Close()
-		}
-		time.Sleep(60 * time.Second) // Revisión periódica
-	}
+    // URL que debería estar respondiendo si el túnel está activo
+    urlFiscalizacion := "http://localhost:10000" 
+
+    for {
+        // Hacemos el check
+        resp, err := http.Get(urlFiscalizacion)
+        
+        if err != nil {
+            fmt.Println("🛰️ [ALERTA]: El túnel no responde. Ejecutando protocolo de reactivación...")
+            
+            // Usamos un comando más robusto con timeout y modo silencioso
+            // -o ExitOnForwardFailure=yes asegura que si no puede conectar, nos avise
+            cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-R", "80:localhost:10000", "serveo.net")
+            
+            err := cmd.Start()
+            if err != nil {
+                fmt.Printf("❌ Error en auto-reparación (revisa SSH en el entorno): %v\n", err)
+            } else {
+                fmt.Println("✅ [CORTEX]: Comando de túnel enviado. Esperando reconexión...")
+            }
+        } else {
+            // El túnel está saludable
+            resp.Body.Close()
+        }
+        
+        // Revisión cada 30 segundos (más frecuente para mantener el flujo de ADN)
+        time.Sleep(30 * time.Second) 
+    }
 }
 
 func reportarAlBuzon() {
@@ -124,7 +138,7 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := io.ReadAll(r.Body)
 
-	// Persistencia
+	// 1. Persistencia del ADN recibido
 	mu.Lock()
 	os.WriteFile(pathCromosomaShared, body, 0644)
 	mu.Unlock()
@@ -134,22 +148,65 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
+		// 2. Ejecución exclusiva en el ecosistema Kimi (Ollama)
 		go func(orden string) {
-			respuesta, err := LlamarProxyGemini(orden)
-			if err != nil {
-				fmt.Printf("❌ Error IA: %v\n", err)
-				return // Aquí es donde evitamos guardar el error 403
-			}
-			// Solo si no hay error, guardamos la respuesta
+			fmt.Printf("🧬 [CORTEX]: Inyectando ADN en Kimi (Ollama): %s\n", orden)
+
+			// Llamamos al motor local de Ollama
+			respuesta := LlamarOllamaLocal(orden, "tojikontvru/kimi-k2.6:latest")
+
+			// 3. Persistencia de la respuesta del motor local
 			mu.Lock()
 			os.WriteFile("./data/respuesta_ia.json", []byte(respuesta), 0644)
 			mu.Unlock()
+
+			fmt.Printf("✅ [KIMI]: Respuesta persistida con éxito.\n")
 		}(msg.Orden)
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ADN_SYNCHRONIZED"))
+	w.Write([]byte("ADN_SYNCHRONIZED_KIMI"))
 }
+
+func LlamarOllamaLocal(mensaje string, modelo string) string {
+	// ⚠️ IMPORTANTE: Si Cortex corre en un servidor (Render/VPS) y Kimi en tu Codespaces,
+	// debes reemplazar "http://127.0.0.1:11434" por la URL pública de tu túnel (ej: "http://tu-tunel.serveo.net")
+	urlOllama := "http://127.0.0.1:11434/api/generate"
+
+	// Payload para Kimi
+	payloadMap := map[string]interface{}{
+		"model":  modelo,
+		"prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
+		"stream": false,
+	}
+
+	payloadBytes, _ := json.Marshal(payloadMap)
+
+	// Disparo al motor local
+	resp, err := http.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Sprintf("❌ Ollama Offline: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Estructura de respuesta de Ollama
+	var ollamaResp struct {
+		Response string `json:"response"`
+		Error    string `json:"error"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "❌ Error decodificando respuesta de Kimi"
+	}
+
+	if ollamaResp.Error != "" {
+		return "❌ Error en Kimi: " + ollamaResp.Error
+	}
+
+	return ollamaResp.Response
+}
+
+
 
 func main() {
 	_ = os.MkdirAll("./data", os.ModePerm)
@@ -194,4 +251,3 @@ func main() {
 	fmt.Printf("🚀 Cortex Autónomo iniciado en puerto %s\n", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
-

@@ -27,34 +27,34 @@ type Telemetria struct {
 
 // Guardián del Túnel: Monitorea la salida al exterior
 func monitorTunelSoberano() {
-    // URL que debería estar respondiendo si el túnel está activo
-    urlFiscalizacion := "http://localhost:10000" 
+	// URL que debería estar respondiendo si el túnel está activo
+	urlFiscalizacion := "http://localhost:10000"
 
-    for {
-        // Hacemos el check
-        resp, err := http.Get(urlFiscalizacion)
-        
-        if err != nil {
-            fmt.Println("🛰️ [ALERTA]: El túnel no responde. Ejecutando protocolo de reactivación...")
-            
-            // Usamos un comando más robusto con timeout y modo silencioso
-            // -o ExitOnForwardFailure=yes asegura que si no puede conectar, nos avise
-            cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-R", "80:localhost:10000", "serveo.net")
-            
-            err := cmd.Start()
-            if err != nil {
-                fmt.Printf("❌ Error en auto-reparación (revisa SSH en el entorno): %v\n", err)
-            } else {
-                fmt.Println("✅ [CORTEX]: Comando de túnel enviado. Esperando reconexión...")
-            }
-        } else {
-            // El túnel está saludable
-            resp.Body.Close()
-        }
-        
-        // Revisión cada 30 segundos (más frecuente para mantener el flujo de ADN)
-        time.Sleep(30 * time.Second) 
-    }
+	for {
+		// Hacemos el check
+		resp, err := http.Get(urlFiscalizacion)
+
+		if err != nil {
+			fmt.Println("🛰️ [ALERTA]: El túnel no responde. Ejecutando protocolo de reactivación...")
+
+			// Usamos un comando más robusto con timeout y modo silencioso
+			// -o ExitOnForwardFailure=yes asegura que si no puede conectar, nos avise
+			cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-R", "80:localhost:10000", "serveo.net")
+
+			err := cmd.Start()
+			if err != nil {
+				fmt.Printf("❌ Error en auto-reparación (revisa SSH en el entorno): %v\n", err)
+			} else {
+				fmt.Println("✅ [CORTEX]: Comando de túnel enviado. Esperando reconexión...")
+			}
+		} else {
+			// El túnel está saludable
+			resp.Body.Close()
+		}
+
+		// Revisión cada 30 segundos (más frecuente para mantener el flujo de ADN)
+		time.Sleep(30 * time.Second)
+	}
 }
 
 func reportarAlBuzon() {
@@ -206,48 +206,29 @@ func LlamarOllamaLocal(mensaje string, modelo string) string {
 	return ollamaResp.Response
 }
 
-
-
 func main() {
 	_ = os.MkdirAll("./data", os.ModePerm)
 
-	// Hilo 1: Telemetría
-	go func() {
-		for {
-			reportarAlBuzon()
-			time.Sleep(60 * time.Second)
-		}
-	}()
-
-	// Hilo 2: Guardián
-	go monitorTunelSoberano()
-
 	mux := http.NewServeMux()
-
-	// 1. RUTA ÚNICA Y SEGURA
-	// Ahora usamos la función que SÍ filtra los errores (RecibirOrdenSoberana)
-	mux.HandleFunc("/api/cortex/recibir-orden", RecibirOrdenSoberana)
-
-	// 2. RUTA DE LIMPIEZA (Nueva)
-	mux.HandleFunc("/api/buzon/limpiar", func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		os.Remove(pathCromosomaShared)
-		os.Remove("./data/respuesta_ia.json")
-		mu.Unlock()
-		fmt.Println("🧹 [CORTEX]: Archivos de estado purgados.")
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// 3. RUTA RAÍZ (Solo informativa)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("CORTEX ONLINE | RESONANCIA: 432Hz"))
-	})
+	// ... define tus rutas aquí ...
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "10000"
 	}
 
+	// 1. Iniciamos el servidor primero
 	fmt.Printf("🚀 Cortex Autónomo iniciado en puerto %s\n", port)
+
+	// 2. Lanzamos los hilos en segundo plano después de que el servidor esté listo
+	go func() {
+		for {
+			reportarAlBuzon()
+			time.Sleep(60 * time.Second)
+		}
+	}()
+	go monitorTunelSoberano()
+
+	// 3. Bloqueamos aquí
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }

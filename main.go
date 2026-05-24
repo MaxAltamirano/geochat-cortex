@@ -28,11 +28,9 @@ type Telemetria struct {
 // Guardián del Túnel: Monitorea la salida al exterior
 func monitorTunelSoberano() {
 	for {
-		// Verificamos conectividad lógica
 		resp, err := http.Get("http://localhost:10000")
 		if err != nil {
 			fmt.Println("🛰️ [ALERTA]: Túnel caído. Auto-reparando...")
-			// Comando de reconexión soberana
 			cmd := exec.Command("ssh", "-R", "80:localhost:10000", "serveo.net")
 			err := cmd.Start()
 			if err != nil {
@@ -69,11 +67,11 @@ func reportarAlBuzon() {
 func main() {
 	_ = os.MkdirAll("./data", os.ModePerm)
 
-	// Hilo 1: Telemetría constante
+	// Hilo 1: Telemetría ajustada a 60 segundos
 	go func() {
 		for {
 			reportarAlBuzon()
-			time.Sleep(30 * time.Second)
+			time.Sleep(60 * time.Second) 
 		}
 	}()
 
@@ -87,7 +85,7 @@ func main() {
 			body, _ := io.ReadAll(r.Body)
 			os.WriteFile(pathCromosomaShared, body, 0644)
 			mu.Unlock()
-
+			
 			fmt.Println("🧬 ADN RECIBIDO Y PERSISTIDO")
 			w.WriteHeader(http.StatusOK)
 			return

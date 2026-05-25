@@ -9,12 +9,16 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
+	//"os/exec"
 	"sync"
 	"time"
+	//"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	
 )
 
 var (
+	DB *gorm.DB
 	pathCromosomaShared = "./data/cromosoma_01.json"
 	mu                  sync.Mutex
 	buzonURL            = "https://geochat-buzon.onrender.com/api/cortex/telemetry"
@@ -25,36 +29,54 @@ type Telemetria struct {
 	Data   string `json:"data"`
 }
 
+type EstadoSistema struct {
+    ID           uint      `gorm:"primaryKey"`
+    EstadoActual string    // "ONLINE" o "BÚNKER"
+    UltimoCambio time.Time
+}
+
+type TareaPendiente struct {
+    ID        uint      `gorm:"primaryKey"`
+    Orden     string    `json:"orden"`
+    CreatedAt time.Time
+}
+
+func guardarEnColaDeEspera(orden string) {
+    tarea := TareaPendiente{
+        Orden:     orden,
+        CreatedAt: time.Now(),
+    }
+    
+    if err := DB.Create(&tarea).Error; err != nil {
+        fmt.Printf("❌ [ERROR]: No se pudo encolar el ADN: %v\n", err)
+    } else {
+        fmt.Printf("📥 [COLA]: ADN encolado para procesamiento posterior: %s\n", orden)
+    }
+}
+
+
 // Guardián del Túnel: Monitorea la salida al exterior
 func monitorTunelSoberano() {
-	// URL que debería estar respondiendo si el túnel está activo
-	urlFiscalizacion := "http://localhost:10000"
+    // 🔥 CAMBIO: Fiscalizamos la URL pública, no el localhost
+    urlFiscalizacion := os.Getenv("KIMI_TUNNEL_URL") 
+    if urlFiscalizacion == "" { return } // Si no hay túnel configurado, no monitoreamos
 
-	for {
-		// Hacemos el check
-		resp, err := http.Get(urlFiscalizacion)
+    for {
+        // Un cliente con timeout corto es vital para no bloquear el Cortex
+        client := http.Client{Timeout: 5 * time.Second}
+        resp, err := client.Get(urlFiscalizacion)
 
-		if err != nil {
-			fmt.Println("🛰️ [ALERTA]: El túnel no responde. Ejecutando protocolo de reactivación...")
-
-			// Usamos un comando más robusto con timeout y modo silencioso
-			// -o ExitOnForwardFailure=yes asegura que si no puede conectar, nos avise
-			cmd := exec.Command("ssh", "-o", "StrictHostKeyChecking=no", "-R", "80:localhost:10000", "serveo.net")
-
-			err := cmd.Start()
-			if err != nil {
-				fmt.Printf("❌ Error en auto-reparación (revisa SSH en el entorno): %v\n", err)
-			} else {
-				fmt.Println("✅ [CORTEX]: Comando de túnel enviado. Esperando reconexión...")
-			}
-		} else {
-			// El túnel está saludable
-			resp.Body.Close()
-		}
-
-		// Revisión cada 30 segundos (más frecuente para mantener el flujo de ADN)
-		time.Sleep(30 * time.Second)
-	}
+        if err != nil {
+            fmt.Printf("🛰️ [ALERTA]: Túnel inalcanzable (%v). El nodo Kimi está fuera de red.\n", err)
+            // Aquí no reinicies el SSH (Render no puede hacerlo), 
+            // simplemente marca el estatus en tu DB como "BÚNKER_MODE"
+            marcarEstadoEnDB("BÚNKER")
+        } else {
+            resp.Body.Close()
+            marcarEstadoEnDB("ONLINE")
+        }
+        time.Sleep(60 * time.Second)
+    }
 }
 
 func reportarAlBuzon() {
@@ -138,7 +160,7 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 
 	body, _ := io.ReadAll(r.Body)
 
-	// 1. Persistencia del ADN recibido
+	// 1. Persistencia inmediata del ADN (Capa de Seguridad)
 	mu.Lock()
 	os.WriteFile(pathCromosomaShared, body, 0644)
 	mu.Unlock()
@@ -148,19 +170,34 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
-		// 2. Ejecución exclusiva en el ecosistema Kimi (Ollama)
-		go func(orden string) {
-			fmt.Printf("🧬 [CORTEX]: Inyectando ADN en Kimi (Ollama): %s\n", orden)
+		
+		// 2. Verificación de estado del Túnel (Modo Búnker)
+		// Consultamos la DB para saber si estamos ONLINE o en BÚNKER
+		var estado EstadoSistema
+		DB.First(&estado, 1) 
 
-			// Llamamos al motor local de Ollama
+		if estado.EstadoActual == "BÚNKER" {
+			fmt.Printf("⚠️ [CORTEX]: Nodo en BÚNKER. Encolando ADN: %s\n", msg.Orden)
+			// Aquí guardarías en una tabla de 'tareas_pendientes' en la DB
+			guardarEnColaDeEspera(msg.Orden) 
+			
+			w.WriteHeader(http.StatusAccepted) // 202 Accepted
+			w.Write([]byte("ADN_EN_COLA_BUNKER"))
+			return
+		}
+
+		// 3. Ejecución en tiempo real si el Túnel está sano
+		go func(orden string) {
+			fmt.Printf("🧬 [CORTEX]: Inyectando ADN en Kimi: %s\n", orden)
+
 			respuesta := LlamarOllamaLocal(orden, "tojikontvru/kimi-k2.6:latest")
 
-			// 3. Persistencia de la respuesta del motor local
+			// Persistencia de respuesta
 			mu.Lock()
 			os.WriteFile("./data/respuesta_ia.json", []byte(respuesta), 0644)
 			mu.Unlock()
 
-			fmt.Printf("✅ [KIMI]: Respuesta persistida con éxito.\n")
+			fmt.Printf("✅ [KIMI]: ADN procesado.\n")
 		}(msg.Orden)
 	}
 
@@ -169,66 +206,94 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 }
 
 func LlamarOllamaLocal(mensaje string, modelo string) string {
-	// ⚠️ IMPORTANTE: Si Cortex corre en un servidor (Render/VPS) y Kimi en tu Codespaces,
-	// debes reemplazar "http://127.0.0.1:11434" por la URL pública de tu túnel (ej: "http://tu-tunel.serveo.net")
-	urlOllama := "http://127.0.0.1:11434/api/generate"
+    // Obtenemos la URL del túnel desde las variables de entorno de Render
+    urlBase := os.Getenv("KIMI_TUNNEL_URL")
+    if urlBase == "" {
+        // Fallback para desarrollo local
+        urlBase = "http://127.0.0.1:11434"
+    }
+    
+    urlOllama := urlBase + "/api/generate"
 
-	// Payload para Kimi
-	payloadMap := map[string]interface{}{
-		"model":  modelo,
-		"prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
-		"stream": false,
-	}
+    payloadMap := map[string]interface{}{
+        "model":  modelo,
+        "prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
+        "stream": false,
+    }
 
-	payloadBytes, _ := json.Marshal(payloadMap)
+    payloadBytes, _ := json.Marshal(payloadMap)
 
-	// Disparo al motor local
-	resp, err := http.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return fmt.Sprintf("❌ Ollama Offline: %v", err)
-	}
-	defer resp.Body.Close()
+    // Agregamos un timeout para que no se quede colgado si el túnel está lento
+    client := &http.Client{Timeout: 30 * time.Second}
+    resp, err := client.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
+    if err != nil {
+        return fmt.Sprintf("❌ Error conectando al Espejo (Túnel): %v", err)
+    }
+    defer resp.Body.Close()
 
-	// Estructura de respuesta de Ollama
-	var ollamaResp struct {
-		Response string `json:"response"`
-		Error    string `json:"error"`
-	}
+    var ollamaResp struct {
+        Response string `json:"response"`
+        Error    string `json:"error"`
+    }
 
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "❌ Error decodificando respuesta de Kimi"
-	}
+    if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+        return "❌ Error decodificando respuesta de Kimi"
+    }
 
-	if ollamaResp.Error != "" {
-		return "❌ Error en Kimi: " + ollamaResp.Error
-	}
-
-	return ollamaResp.Response
+    return ollamaResp.Response
 }
 
+func marcarEstadoEnDB(nuevoEstado string) {
+    // Si usas una tabla de estado, actualízala así:
+    var estado EstadoSistema
+    // Buscamos el primer registro o creamos uno nuevo
+    DB.FirstOrCreate(&estado, EstadoSistema{ID: 1})
+    
+    // Solo actualizamos si el estado cambió para no saturar la DB
+    if estado.EstadoActual != nuevoEstado {
+        DB.Model(&estado).Updates(EstadoSistema{
+            EstadoActual: nuevoEstado, 
+            UltimoCambio: time.Now(),
+        })
+        fmt.Printf("⚠️ [SISTEMA]: Estado cambiado a %s\n", nuevoEstado)
+    }
+}
+
+
 func main() {
-	_ = os.MkdirAll("./data", os.ModePerm)
+
+	
+_ = os.MkdirAll("./data", os.ModePerm)
 
 	mux := http.NewServeMux()
-	// ... define tus rutas aquí ...
+	
+	// 🔥 ¡ESENCIAL! Registro de la ruta que escucha el ADN
+	mux.HandleFunc("/api/cortex/recibir-orden", RecibirOrdenSoberana)
+	
+	// Ruta de salud para verificar que el cortex vive
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Cortex Operativo. Resonancia 432Hz.")
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "10000"
 	}
 
-	// 1. Iniciamos el servidor primero
 	fmt.Printf("🚀 Cortex Autónomo iniciado en puerto %s\n", port)
 
-	// 2. Lanzamos los hilos en segundo plano después de que el servidor esté listo
+	// 2. Hilos en segundo plano
 	go func() {
 		for {
 			reportarAlBuzon()
 			time.Sleep(60 * time.Second)
 		}
 	}()
+	
+	// Lanzamos el monitor de túnel
 	go monitorTunelSoberano()
 
-	// 3. Bloqueamos aquí
+	// 3. Servidor
 	log.Fatal(http.ListenAndServe(":"+port, mux))
+
 }

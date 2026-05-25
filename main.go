@@ -9,16 +9,17 @@ import (
 	"log"
 	"net/http"
 	"os"
+
 	//"os/exec"
 	"sync"
 	"time"
+
 	//"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	
 )
 
 var (
-	DB *gorm.DB
+	DB                  *gorm.DB
 	pathCromosomaShared = "./data/cromosoma_01.json"
 	mu                  sync.Mutex
 	buzonURL            = "https://geochat-buzon.onrender.com/api/cortex/telemetry"
@@ -30,53 +31,54 @@ type Telemetria struct {
 }
 
 type EstadoSistema struct {
-    ID           uint      `gorm:"primaryKey"`
-    EstadoActual string    // "ONLINE" o "BÚNKER"
-    UltimoCambio time.Time
+	ID           uint   `gorm:"primaryKey"`
+	EstadoActual string // "ONLINE" o "BÚNKER"
+	UltimoCambio time.Time
 }
 
 type TareaPendiente struct {
-    ID        uint      `gorm:"primaryKey"`
-    Orden     string    `json:"orden"`
-    CreatedAt time.Time
+	ID        uint   `gorm:"primaryKey"`
+	Orden     string `json:"orden"`
+	CreatedAt time.Time
 }
 
 func guardarEnColaDeEspera(orden string) {
-    tarea := TareaPendiente{
-        Orden:     orden,
-        CreatedAt: time.Now(),
-    }
-    
-    if err := DB.Create(&tarea).Error; err != nil {
-        fmt.Printf("❌ [ERROR]: No se pudo encolar el ADN: %v\n", err)
-    } else {
-        fmt.Printf("📥 [COLA]: ADN encolado para procesamiento posterior: %s\n", orden)
-    }
-}
+	tarea := TareaPendiente{
+		Orden:     orden,
+		CreatedAt: time.Now(),
+	}
 
+	if err := DB.Create(&tarea).Error; err != nil {
+		fmt.Printf("❌ [ERROR]: No se pudo encolar el ADN: %v\n", err)
+	} else {
+		fmt.Printf("📥 [COLA]: ADN encolado para procesamiento posterior: %s\n", orden)
+	}
+}
 
 // Guardián del Túnel: Monitorea la salida al exterior
 func monitorTunelSoberano() {
-    // 🔥 CAMBIO: Fiscalizamos la URL pública, no el localhost
-    urlFiscalizacion := os.Getenv("KIMI_TUNNEL_URL") 
-    if urlFiscalizacion == "" { return } // Si no hay túnel configurado, no monitoreamos
+	// 🔥 CAMBIO: Fiscalizamos la URL pública, no el localhost
+	urlFiscalizacion := os.Getenv("KIMI_TUNNEL_URL")
+	if urlFiscalizacion == "" {
+		return
+	} // Si no hay túnel configurado, no monitoreamos
 
-    for {
-        // Un cliente con timeout corto es vital para no bloquear el Cortex
-        client := http.Client{Timeout: 5 * time.Second}
-        resp, err := client.Get(urlFiscalizacion)
+	for {
+		// Un cliente con timeout corto es vital para no bloquear el Cortex
+		client := http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get(urlFiscalizacion)
 
-        if err != nil {
-            fmt.Printf("🛰️ [ALERTA]: Túnel inalcanzable (%v). El nodo Kimi está fuera de red.\n", err)
-            // Aquí no reinicies el SSH (Render no puede hacerlo), 
-            // simplemente marca el estatus en tu DB como "BÚNKER_MODE"
-            marcarEstadoEnDB("BÚNKER")
-        } else {
-            resp.Body.Close()
-            marcarEstadoEnDB("ONLINE")
-        }
-        time.Sleep(60 * time.Second)
-    }
+		if err != nil {
+			fmt.Printf("🛰️ [ALERTA]: Túnel inalcanzable (%v). El nodo Kimi está fuera de red.\n", err)
+			// Aquí no reinicies el SSH (Render no puede hacerlo),
+			// simplemente marca el estatus en tu DB como "BÚNKER_MODE"
+			marcarEstadoEnDB("BÚNKER")
+		} else {
+			resp.Body.Close()
+			marcarEstadoEnDB("ONLINE")
+		}
+		time.Sleep(60 * time.Second)
+	}
 }
 
 func reportarAlBuzon() {
@@ -170,17 +172,17 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
-		
+
 		// 2. Verificación de estado del Túnel (Modo Búnker)
 		// Consultamos la DB para saber si estamos ONLINE o en BÚNKER
 		var estado EstadoSistema
-		DB.First(&estado, 1) 
+		DB.First(&estado, 1)
 
 		if estado.EstadoActual == "BÚNKER" {
 			fmt.Printf("⚠️ [CORTEX]: Nodo en BÚNKER. Encolando ADN: %s\n", msg.Orden)
 			// Aquí guardarías en una tabla de 'tareas_pendientes' en la DB
-			guardarEnColaDeEspera(msg.Orden) 
-			
+			guardarEnColaDeEspera(msg.Orden)
+
 			w.WriteHeader(http.StatusAccepted) // 202 Accepted
 			w.Write([]byte("ADN_EN_COLA_BUNKER"))
 			return
@@ -206,70 +208,87 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 }
 
 func LlamarOllamaLocal(mensaje string, modelo string) string {
-    // Obtenemos la URL del túnel desde las variables de entorno de Render
-    urlBase := os.Getenv("KIMI_TUNNEL_URL")
-    if urlBase == "" {
-        // Fallback para desarrollo local
-        urlBase = "http://127.0.0.1:11434"
-    }
-    
-    urlOllama := urlBase + "/api/generate"
+	// Obtenemos la URL del túnel desde las variables de entorno de Render
+	urlBase := os.Getenv("KIMI_TUNNEL_URL")
+	if urlBase == "" {
+		// Fallback para desarrollo local
+		urlBase = "http://127.0.0.1:11434"
+	}
 
-    payloadMap := map[string]interface{}{
-        "model":  modelo,
-        "prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
-        "stream": false,
-    }
+	urlOllama := urlBase + "/api/generate"
 
-    payloadBytes, _ := json.Marshal(payloadMap)
+	payloadMap := map[string]interface{}{
+		"model":  modelo,
+		"prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
+		"stream": false,
+	}
 
-    // Agregamos un timeout para que no se quede colgado si el túnel está lento
-    client := &http.Client{Timeout: 30 * time.Second}
-    resp, err := client.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
-    if err != nil {
-        return fmt.Sprintf("❌ Error conectando al Espejo (Túnel): %v", err)
-    }
-    defer resp.Body.Close()
+	payloadBytes, _ := json.Marshal(payloadMap)
 
-    var ollamaResp struct {
-        Response string `json:"response"`
-        Error    string `json:"error"`
-    }
+	// Agregamos un timeout para que no se quede colgado si el túnel está lento
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Sprintf("❌ Error conectando al Espejo (Túnel): %v", err)
+	}
+	defer resp.Body.Close()
 
-    if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-        return "❌ Error decodificando respuesta de Kimi"
-    }
+	var ollamaResp struct {
+		Response string `json:"response"`
+		Error    string `json:"error"`
+	}
 
-    return ollamaResp.Response
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "❌ Error decodificando respuesta de Kimi"
+	}
+
+	return ollamaResp.Response
 }
 
 func marcarEstadoEnDB(nuevoEstado string) {
-    // Si usas una tabla de estado, actualízala así:
-    var estado EstadoSistema
-    // Buscamos el primer registro o creamos uno nuevo
-    DB.FirstOrCreate(&estado, EstadoSistema{ID: 1})
-    
-    // Solo actualizamos si el estado cambió para no saturar la DB
-    if estado.EstadoActual != nuevoEstado {
-        DB.Model(&estado).Updates(EstadoSistema{
-            EstadoActual: nuevoEstado, 
-            UltimoCambio: time.Now(),
-        })
-        fmt.Printf("⚠️ [SISTEMA]: Estado cambiado a %s\n", nuevoEstado)
-    }
-}
+	// 🛡️ GUARDIÁN: Seguridad contra puntero nulo
+	// Si la conexión DB no ha terminado de establecerse, no intentamos operar
+	if DB == nil {
+		log.Printf("⚠️ [DB-LOCK]: El Córtex aún está inicializando, esperando conexión...")
+		return
+	}
 
+	// 🧬 LÓGICA DE PERSISTENCIA SOBERANA
+	var estado EstadoSistema
+
+	// Usamos el ID 1 como Singleton de estado global del Córtex
+	result := DB.FirstOrCreate(&estado, EstadoSistema{ID: 1})
+
+	if result.Error != nil {
+		log.Printf("❌ [DB-ERROR]: Fallo al recuperar/crear estado: %v", result.Error)
+		return
+	}
+
+	// Solo escribimos si hay una mutación real (Optimización de latencia)
+	if estado.EstadoActual != nuevoEstado {
+		err := DB.Model(&estado).Updates(EstadoSistema{
+			EstadoActual: nuevoEstado,
+			UltimoCambio: time.Now(),
+		}).Error
+
+		if err != nil {
+			log.Printf("❌ [DB-ERROR]: Fallo al actualizar estado: %v", err)
+			return
+		}
+
+		fmt.Printf("⚠️ [SISTEMA]: Estado sincronizado en Médula -> %s\n", nuevoEstado)
+	}
+}
 
 func main() {
 
-	
-_ = os.MkdirAll("./data", os.ModePerm)
+	_ = os.MkdirAll("./data", os.ModePerm)
 
 	mux := http.NewServeMux()
-	
+
 	// 🔥 ¡ESENCIAL! Registro de la ruta que escucha el ADN
 	mux.HandleFunc("/api/cortex/recibir-orden", RecibirOrdenSoberana)
-	
+
 	// Ruta de salud para verificar que el cortex vive
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Cortex Operativo. Resonancia 432Hz.")
@@ -289,7 +308,7 @@ _ = os.MkdirAll("./data", os.ModePerm)
 			time.Sleep(60 * time.Second)
 		}
 	}()
-	
+
 	// Lanzamos el monitor de túnel
 	go monitorTunelSoberano()
 

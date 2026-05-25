@@ -36,6 +36,13 @@ type EstadoSistema struct {
 	UltimoCambio time.Time
 }
 
+type RegistroCortex struct {
+    ID           uint      `gorm:"primaryKey" json:"id"`
+    Orden        string    `json:"mensaje" gorm:"column:orden"`
+    Status       string    `json:"status" gorm:"column:status"`
+    Timestamp    time.Time `json:"timestamp" gorm:"column:timestamp"`
+}
+
 type TareaPendiente struct {
 	ID        uint   `gorm:"primaryKey"`
 	Orden     string `json:"orden"`
@@ -281,16 +288,32 @@ func marcarEstadoEnDB(nuevoEstado string) {
 }
 
 func main() {
-
 	_ = os.MkdirAll("./data", os.ModePerm)
 
 	mux := http.NewServeMux()
 
-	// 🔥 ¡ESENCIAL! Registro de la ruta que escucha el ADN
+	// 1. RUTAS DE API (Registro explícito y prioritario)
 	mux.HandleFunc("/api/cortex/recibir-orden", RecibirOrdenSoberana)
+	mux.HandleFunc("/api/buzon/entrada", RecibirOrdenSoberana)
+	
+	// Handler dedicado para la salida de datos
+	mux.HandleFunc("/api/buzon/salida", func(w http.ResponseWriter, r *http.Request) {
+		var historial []RegistroCortex
+		// Traemos los últimos 50 mensajes de la médula
+		DB.Order("timestamp desc").Limit(50).Find(&historial)
+		w.Header().Set("Content-Type", "application/json")
+		if historial == nil {
+			historial = []RegistroCortex{}
+		}
+		json.NewEncoder(w).Encode(historial)
+	})
 
-	// Ruta de salud para verificar que el cortex vive
+	// 2. RUTA RAÍZ (Estricta: Solo responde en "/" exacto)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
 		fmt.Fprintf(w, "Cortex Operativo. Resonancia 432Hz.")
 	})
 
@@ -301,7 +324,7 @@ func main() {
 
 	fmt.Printf("🚀 Cortex Autónomo iniciado en puerto %s\n", port)
 
-	// 2. Hilos en segundo plano
+	// 3. Hilos en segundo plano
 	go func() {
 		for {
 			reportarAlBuzon()
@@ -312,7 +335,6 @@ func main() {
 	// Lanzamos el monitor de túnel
 	go monitorTunelSoberano()
 
-	// 3. Servidor
+	// 4. Servidor
 	log.Fatal(http.ListenAndServe(":"+port, mux))
-
 }

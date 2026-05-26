@@ -17,7 +17,7 @@ import (
 	//"gorm.io/driver/postgres"
 	"gorm.io/driver/postgres" // Asegúrate de tener este import
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	//"gorm.io/gorm/logger"
 )
 
 var (
@@ -255,62 +255,43 @@ func LlamarOllamaLocal(mensaje string, modelo string) string {
 }
 
 func marcarEstadoEnDB(nuevoEstado string) {
-	// 🛡️ GUARDIÁN: Seguridad contra puntero nulo
-	if DB == nil {
-		log.Printf("⚠️ [DB-LOCK]: El Córtex aún está inicializando, esperando conexión...")
-		return
-	}
+	if DB == nil { return }
 
-	// 🧬 LÓGICA DE PERSISTENCIA SOBERANA
 	var estado EstadoSistema
+	DB.FirstOrCreate(&estado, EstadoSistema{ID: 1})
 
-	// Usamos el ID 1 como Singleton de estado global del Córtex
-	result := DB.FirstOrCreate(&estado, EstadoSistema{ID: 1})
-
-	if result.Error != nil {
-		log.Printf("❌ [DB-ERROR]: Fallo al recuperar/crear estado: %v", result.Error)
-		return
-	}
-
-	// 🔥 LÓGICA DE RESURRECCIÓN DE ADN
-	// Si detectamos que antes estábamos en BÚNKER y ahora recuperamos conexión
+	// 🔥 LÓGICA DE RESURRECCIÓN: Si volvemos a la vida, procesamos el pasado
 	if estado.EstadoActual == "BÚNKER" && nuevoEstado == "ONLINE" {
 		fmt.Printf("🚀 [SISTEMA]: Túnel restaurado. Iniciando sincronización de ADN encolado...\n")
-		go procesarColaDeEspera() // Ejecución en segundo plano para no bloquear al Córtex
+		go procesarColaDeEspera() // Ejecución en segundo plano para no bloquear
 	}
 
-	// Solo escribimos si hay una mutación real (Optimización de latencia)
 	if estado.EstadoActual != nuevoEstado {
-		err := DB.Model(&estado).Updates(EstadoSistema{
-			EstadoActual: nuevoEstado,
+		DB.Model(&estado).Updates(EstadoSistema{
+			EstadoActual: nuevoEstado, 
 			UltimoCambio: time.Now(),
-		}).Error
-
-		if err != nil {
-			log.Printf("❌ [DB-ERROR]: Fallo al actualizar estado: %v", err)
-			return
-		}
-
+		})
 		fmt.Printf("⚠️ [SISTEMA]: Estado sincronizado en Médula -> %s\n", nuevoEstado)
 	}
 }
+
 
 func procesarColaDeEspera() {
 	var tareas []TareaPendiente
 	// Buscamos todas las tareas ordenadas por fecha de creación
 	if err := DB.Order("created_at asc").Find(&tareas).Error; err != nil {
-		fmt.Printf("❌ [ERROR]: Fallo al leer cola: %v\n", err)
+		fmt.Printf("❌ [ERROR]: Fallo al leer cola de espera: %v\n", err)
 		return
 	}
 
 	for _, t := range tareas {
 		fmt.Printf("📦 [PROCESANDO]: Ejecutando ADN atrasado -> %s\n", t.Orden)
-
+		
 		// Enviamos al Espejo (Ollama)
 		resultado := LlamarOllamaLocal(t.Orden, "tojikontvru/kimi-k2.6:latest")
 		fmt.Printf("✅ [KIMI]: ADN encolado procesado. Resultado: %s\n", resultado)
 
-		// Eliminamos la tarea tras procesarla exitosamente
+		// Eliminamos la tarea tras procesarla exitosamente para no repetir
 		DB.Delete(&t)
 	}
 }

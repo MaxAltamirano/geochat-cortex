@@ -15,9 +15,9 @@ import (
 	"time"
 
 	//"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 	"gorm.io/driver/postgres" // Asegúrate de tener este import
-    
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var (
@@ -39,10 +39,10 @@ type EstadoSistema struct {
 }
 
 type RegistroCortex struct {
-    ID           uint      `gorm:"primaryKey" json:"id"`
-    Orden        string    `json:"mensaje" gorm:"column:orden"`
-    Status       string    `json:"status" gorm:"column:status"`
-    Timestamp    time.Time `json:"timestamp" gorm:"column:timestamp"`
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Orden     string    `json:"mensaje" gorm:"column:orden"`
+	Status    string    `json:"status" gorm:"column:status"`
+	Timestamp time.Time `json:"timestamp" gorm:"column:timestamp"`
 }
 
 type TareaPendiente struct {
@@ -296,45 +296,48 @@ func marcarEstadoEnDB(nuevoEstado string) {
 }
 
 func procesarColaDeEspera() {
-    var tareas []TareaPendiente
-    // Buscamos todas las tareas ordenadas por fecha de creación
-    if err := DB.Order("created_at asc").Find(&tareas).Error; err != nil {
-        fmt.Printf("❌ [ERROR]: Fallo al leer cola: %v\n", err)
-        return
-    }
+	var tareas []TareaPendiente
+	// Buscamos todas las tareas ordenadas por fecha de creación
+	if err := DB.Order("created_at asc").Find(&tareas).Error; err != nil {
+		fmt.Printf("❌ [ERROR]: Fallo al leer cola: %v\n", err)
+		return
+	}
 
-    for _, t := range tareas {
-        fmt.Printf("📦 [PROCESANDO]: Ejecutando ADN atrasado -> %s\n", t.Orden)
-        
-        // Enviamos al Espejo (Ollama)
-        resultado := LlamarOllamaLocal(t.Orden, "tojikontvru/kimi-k2.6:latest")
-        fmt.Printf("✅ [KIMI]: ADN encolado procesado. Resultado: %s\n", resultado)
+	for _, t := range tareas {
+		fmt.Printf("📦 [PROCESANDO]: Ejecutando ADN atrasado -> %s\n", t.Orden)
 
-        // Eliminamos la tarea tras procesarla exitosamente
-        DB.Delete(&t)
-    }
+		// Enviamos al Espejo (Ollama)
+		resultado := LlamarOllamaLocal(t.Orden, "tojikontvru/kimi-k2.6:latest")
+		fmt.Printf("✅ [KIMI]: ADN encolado procesado. Resultado: %s\n", resultado)
+
+		// Eliminamos la tarea tras procesarla exitosamente
+		DB.Delete(&t)
+	}
 }
 
 func ConectarMedula() {
     dsn := os.Getenv("DATABASE_URL")
+    
+    // Abrimos conexión con el driver de postgres
     db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
     if err != nil {
         log.Fatalf("❌ [MÉDULA]: Fallo de conexión: %v", err)
     }
 
-    // 🧬 AUTO-MIGRACIÓN: Esto crea las tablas automáticamente
+    // 🧬 AUTO-MIGRACIÓN: Creación automática de tablas (Estado, Registro y Cola)
     err = db.AutoMigrate(&EstadoSistema{}, &RegistroCortex{}, &TareaPendiente{})
     if err != nil {
-        log.Fatalf("❌ [MÉDULA]: Fallo en migración: %v", err)
+        log.Fatalf("❌ [MÉDULA]: Error crítico en migración (¿Permisos insuficientes?): %v", err)
     }
 
+    // Estabilización del pool para eliminar los errores de "Connection reset by peer"
     sqlDB, _ := db.DB()
     sqlDB.SetMaxIdleConns(10)
     sqlDB.SetMaxOpenConns(100)
-    sqlDB.SetConnMaxLifetime(time.Hour)
+    sqlDB.SetConnMaxLifetime(time.Minute * 5) // Ajustado para evitar timeouts de Render
 
     DB = db
-    fmt.Println("🧬 [MÉDULA]: Sistema nervioso sincronizado y tablas creadas.")
+    fmt.Println("🧬 [MÉDULA]: Sistema nervioso sincronizado y tablas validadas.")
 }
 
 func main() {
@@ -348,7 +351,7 @@ func main() {
 	// 1. RUTAS DE API (Registro explícito y prioritario)
 	mux.HandleFunc("/api/cortex/recibir-orden", RecibirOrdenSoberana)
 	mux.HandleFunc("/api/buzon/entrada", RecibirOrdenSoberana)
-	
+
 	// Handler dedicado para la salida de datos
 	mux.HandleFunc("/api/buzon/salida", func(w http.ResponseWriter, r *http.Request) {
 		var historial []RegistroCortex

@@ -317,23 +317,24 @@ func procesarColaDeEspera() {
 
 func ConectarMedula() {
     dsn := os.Getenv("DATABASE_URL")
-    if dsn == "" {
-        log.Fatal("❌ [MÉDULA]: DATABASE_URL no configurada en el entorno.")
-    }
-
     db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
     if err != nil {
         log.Fatalf("❌ [MÉDULA]: Fallo de conexión: %v", err)
     }
 
-    // Configuración de persistencia (El "hierro" para que no se corte)
+    // 🧬 AUTO-MIGRACIÓN: Esto crea las tablas automáticamente
+    err = db.AutoMigrate(&EstadoSistema{}, &RegistroCortex{}, &TareaPendiente{})
+    if err != nil {
+        log.Fatalf("❌ [MÉDULA]: Fallo en migración: %v", err)
+    }
+
     sqlDB, _ := db.DB()
     sqlDB.SetMaxIdleConns(10)
     sqlDB.SetMaxOpenConns(100)
     sqlDB.SetConnMaxLifetime(time.Hour)
 
-    DB = db // Ahora DB ya no es nil
-    fmt.Println("🧬 [MÉDULA]: Sistema nervioso sincronizado y persistente.")
+    DB = db
+    fmt.Println("🧬 [MÉDULA]: Sistema nervioso sincronizado y tablas creadas.")
 }
 
 func main() {

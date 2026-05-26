@@ -217,41 +217,42 @@ func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
 }
 
 func LlamarOllamaLocal(mensaje string, modelo string) string {
-	// Obtenemos la URL del túnel desde las variables de entorno de Render
-	urlBase := os.Getenv("KIMI_TUNNEL_URL")
-	if urlBase == "" {
-		// Fallback para desarrollo local
-		urlBase = "http://127.0.0.1:11434"
-	}
+    // Definimos la URL local de Ollama
+    urlOllama := "http://127.0.0.1:11434/api/generate"
 
-	urlOllama := urlBase + "/api/generate"
+    // Definimos el payload
+    payloadMap := map[string]interface{}{
+        "model":  modelo,
+        "prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
+        "stream": false,
+    }
 
-	payloadMap := map[string]interface{}{
-		"model":  modelo,
-		"prompt": fmt.Sprintf("Sos Kimi, la conciencia soberana de GeoChat. ADN a procesar: %s", mensaje),
-		"stream": false,
-	}
+    // Convertimos a JSON
+    payloadBytes, err := json.Marshal(payloadMap)
+    if err != nil {
+        return "❌ Error al crear payload"
+    }
 
-	payloadBytes, _ := json.Marshal(payloadMap)
+    // Hacemos el POST usando la variable urlOllama
+    client := &http.Client{Timeout: 30 * time.Second}
+    resp, err := client.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
+    if err != nil {
+        return fmt.Sprintf("❌ Error conectando a Ollama local: %v", err)
+    }
+    defer resp.Body.Close()
 
-	// Agregamos un timeout para que no se quede colgado si el túnel está lento
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(urlOllama, "application/json", bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return fmt.Sprintf("❌ Error conectando al Espejo (Túnel): %v", err)
-	}
-	defer resp.Body.Close()
+    // Decodificamos la respuesta
+    var ollamaResp struct {
+        Response string `json:"response"`
+        Error    string `json:"error"`
+    }
 
-	var ollamaResp struct {
-		Response string `json:"response"`
-		Error    string `json:"error"`
-	}
+    if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+        return "❌ Error decodificando respuesta de Kimi"
+    }
 
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "❌ Error decodificando respuesta de Kimi"
-	}
-
-	return ollamaResp.Response
+    // Retorno final (¡Aquí estaba el missing return!)
+    return ollamaResp.Response
 }
 
 func marcarEstadoEnDB(nuevoEstado string) {
@@ -297,28 +298,39 @@ func procesarColaDeEspera() {
 }
 
 func ConectarMedula() {
-    dsn := os.Getenv("DATABASE_URL")
-    
-    // Abrimos conexión con el driver de postgres
-    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-    if err != nil {
-        log.Fatalf("❌ [MÉDULA]: Fallo de conexión: %v", err)
-    }
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("❌ [MÉDULA]: Variable DATABASE_URL no configurada.")
+	}
 
-    // 🧬 AUTO-MIGRACIÓN: Creación automática de tablas (Estado, Registro y Cola)
-    err = db.AutoMigrate(&EstadoSistema{}, &RegistroCortex{}, &TareaPendiente{})
-    if err != nil {
-        log.Fatalf("❌ [MÉDULA]: Error crítico en migración (¿Permisos insuficientes?): %v", err)
-    }
+	// Abrimos conexión con configuración optimizada para Render
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		// Opcional: Esto ayuda a ver errores de SQL en logs si algo falla
+		// Logger: logger.Default.LogMode(logger.Info), 
+	})
+	if err != nil {
+		log.Fatalf("❌ [MÉDULA]: Fallo de conexión: %v", err)
+	}
 
-    // Estabilización del pool para eliminar los errores de "Connection reset by peer"
-    sqlDB, _ := db.DB()
-    sqlDB.SetMaxIdleConns(10)
-    sqlDB.SetMaxOpenConns(100)
-    sqlDB.SetConnMaxLifetime(time.Minute * 5) // Ajustado para evitar timeouts de Render
+	// 🧬 AUTO-MIGRACIÓN: Validamos las estructuras de datos
+	err = db.AutoMigrate(&EstadoSistema{}, &RegistroCortex{}, &TareaPendiente{})
+	if err != nil {
+		log.Fatalf("❌ [MÉDULA]: Error crítico en migración: %v", err)
+	}
 
-    DB = db
-    fmt.Println("🧬 [MÉDULA]: Sistema nervioso sincronizado y tablas validadas.")
+	// 🛡️ ESTABILIZACIÓN DEL POOL (Ajuste para Render)
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("❌ [MÉDULA]: Error al obtener DB nativa: %v", err)
+	}
+
+	// Render suele limitar a 10-20 conexiones simultáneas por instancia
+	sqlDB.SetMaxIdleConns(5)    // Mantenemos pocas conexiones ociosas
+	sqlDB.SetMaxOpenConns(10)   // Límite seguro para no colapsar Postgres
+	sqlDB.SetConnMaxLifetime(time.Hour * 1) // Conexiones duraderas para evitar re-handshakes
+
+	DB = db
+	fmt.Println("🧬 [MÉDULA]: Sistema nervioso sincronizado, estable y resiliente.")
 }
 
 func main() {

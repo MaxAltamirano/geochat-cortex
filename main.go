@@ -20,6 +20,14 @@ import (
 	//"gorm.io/gorm/logger"
 )
 
+const (
+	SUCCESS = "\033[1;32m"
+	GOLD    = "\033[1;33m"
+	NEON    = "\033[1;36m"
+	ERROR   = "\033[1;31m"
+	NC      = "\033[0m"
+)
+
 var (
 	DB                  *gorm.DB
 	pathCromosomaShared = "./data/cromosoma_01.json"
@@ -49,6 +57,14 @@ type TareaPendiente struct {
 	ID        uint   `gorm:"primaryKey"`
 	Orden     string `json:"orden"`
 	CreatedAt time.Time
+}
+
+
+type Task struct {
+	ID          uint   `gorm:"primaryKey"`
+	Titulo      string `gorm:"column:titulo"`
+	Descripcion string `gorm:"column:descripcion"`
+	Estado      string `gorm:"column:estado;default:pendiente"`
 }
 
 func guardarEnColaDeEspera(orden string) {
@@ -251,7 +267,7 @@ func marcarEstadoEnDB(nuevoEstado string) {
 	// 🔥 LÓGICA DE RESURRECCIÓN: Si volvemos a la vida, procesamos el pasado
 	if estado.EstadoActual == "BÚNKER" && nuevoEstado == "ONLINE" {
 		fmt.Printf("🚀 [SISTEMA]: Túnel restaurado. Iniciando sincronización de ADN encolado...\n")
-		go procesarColaDeEspera() // Ejecución en segundo plano para no bloquear
+		go ProcesarColaPendiente() // Ejecución en segundo plano para no bloquear
 	}
 
 	if estado.EstadoActual != nuevoEstado {
@@ -265,26 +281,71 @@ func marcarEstadoEnDB(nuevoEstado string) {
 
 
 // En tu función de procesamiento local, añade un "Watchdog" de RAM
-func procesarColaDeEspera() {
-    var tareas []TareaPendiente
-    DB.Order("created_at asc").Find(&tareas)
-
-    for _, t := range tareas {
-        // Validación de salud: Si el sistema está en BÚNKER, no procesar
-        var estado EstadoSistema
-        DB.First(&estado, 1)
-        if estado.EstadoActual == "BÚNKER" {
-            fmt.Println("⚠️ [SISTEMA]: Búnker activo. Deteniendo procesador.")
-            return 
-        }
-
-        // Ejecución segura
-        resultado := LlamarOllamaLocal(t.Orden, "tojikontvru/kimi-k2.6:latest")
-        
-        // Guardar resultado y limpiar tarea
-        // ... (código de persistencia)
-        DB.Delete(&t)
+func ProcesarColaPendiente() {
+    var tareas []Task
+    
+    // Usamos el resultado para validar si hay carga de trabajo real
+    result := DB.Where("estado = ?", "pendiente").Find(&tareas)
+    
+    // 1. Verificamos si hubo error en la consulta
+    if result.Error != nil {
+        log.Printf("❌ [MÉDULA]: Error consultando cola: %v", result.Error)
+        return
     }
+
+    // 2. Verificamos si hay tareas usando el resultado (RowsAffected)
+    if result.RowsAffected == 0 {
+        // No hay nada que procesar, salimos limpiamente
+        return 
+    }
+
+    fmt.Printf("📋 [CÓRTEX]: Procesando %d tareas pendientes...\n", result.RowsAffected)
+
+    for _, tarea := range tareas {
+        err := EnviarARender(tarea)
+        if err == nil {
+            // Actualizamos el estado solo si el envío fue exitoso
+            DB.Model(&tarea).Update("estado", "sincronizado")
+        } else {
+            log.Printf("⚠️ [CÓRTEX]: Tarea %d fallida, reintentando en el próximo pulso.", tarea.ID)
+            // No hacemos nada más, dejamos que la tarea siga pendiente
+        }
+    }
+}
+
+
+// --- 📡 NEXO DE COMUNICACIÓN CON RENDER ---
+func EnviarARender(tarea Task) error {
+	// URL hacia tu API en Render
+	url := "https://geochat-buzon.onrender.com/api/cortex/recibir-orden"
+
+	// Estructura del ADN a transmitir
+	data := map[string]interface{}{
+		"id_adn":           "MAIN-LAB-SYNC", // O tu variable global memoriaADN.DNA_ID
+		"orden":            tarea.Titulo + ": " + tarea.Descripcion,
+		"contexto_tecnico": "Sincronización Médula-Render",
+		"target_ia":        "KIMI",
+	}
+
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("error serializando ADN: %v", err)
+	}
+
+	// Disparo de red
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payload))
+	if err != nil {
+		log.Printf(ERROR+"❌ Fallo de conexión con Render: %v"+NC, err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("error en Render: código %d", resp.StatusCode)
+	}
+
+	fmt.Printf("%s📡 [NEXO]: ADN enviado a Render con éxito.%s\n", SUCCESS, NC)
+	return nil
 }
 
 func ConectarMedula() {

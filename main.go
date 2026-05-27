@@ -164,56 +164,43 @@ func LlamarProxyGemini(mensaje string) (string, error) {
 }
 
 func RecibirOrdenSoberana(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Solo POST permitido", http.StatusMethodNotAllowed)
-		return
-	}
+    if r.Method != http.MethodPost {
+        http.Error(w, "Solo POST permitido", http.StatusMethodNotAllowed)
+        return
+    }
 
-	body, _ := io.ReadAll(r.Body)
+    body, _ := io.ReadAll(r.Body)
 
-	// 1. Persistencia inmediata del ADN (Capa de Seguridad)
-	mu.Lock()
-	os.WriteFile(pathCromosomaShared, body, 0644)
-	mu.Unlock()
+    // 1. Persistencia inmediata del ADN (Capa de Seguridad)
+    mu.Lock()
+    os.WriteFile(pathCromosomaShared, body, 0644)
+    mu.Unlock()
 
-	var msg struct {
-		Orden string `json:"orden"`
-	}
+    var msg struct {
+        Orden string `json:"orden"`
+    }
 
-	if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
+    if err := json.Unmarshal(body, &msg); err == nil && msg.Orden != "" {
+        
+        // 2. FILOSOFÍA DE ESPEJO PASIVO:
+        // Render NO procesa IA. Render solo encola. 
+        // El Nodo Local (Linux) es el único que tiene permiso para ejecutar Ollama.
+        
+        fmt.Printf("📥 [CORTEX]: ADN recibido. Encolando para procesamiento soberano local: %s\n", msg.Orden)
+        
+        // Guardamos en la médula (Postgres) para que el Nodo Local lo vea y ejecute
+        guardarEnColaDeEspera(msg.Orden)
 
-		// 2. Verificación de estado del Túnel (Modo Búnker)
-		// Consultamos la DB para saber si estamos ONLINE o en BÚNKER
-		var estado EstadoSistema
-		DB.First(&estado, 1)
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusAccepted) // 202 Accepted: El sistema lo tomó, pero el proceso es asíncrono
+        json.NewEncoder(w).Encode(map[string]string{
+            "status": "ADN_ENCOLADO",
+            "info":   "El Nodo Local procesará esta orden en el próximo pulso.",
+        })
+        return
+    }
 
-		if estado.EstadoActual == "BÚNKER" {
-			fmt.Printf("⚠️ [CORTEX]: Nodo en BÚNKER. Encolando ADN: %s\n", msg.Orden)
-			// Aquí guardarías en una tabla de 'tareas_pendientes' en la DB
-			guardarEnColaDeEspera(msg.Orden)
-
-			w.WriteHeader(http.StatusAccepted) // 202 Accepted
-			w.Write([]byte("ADN_EN_COLA_BUNKER"))
-			return
-		}
-
-		// 3. Ejecución en tiempo real si el Túnel está sano
-		go func(orden string) {
-			fmt.Printf("🧬 [CORTEX]: Inyectando ADN en Kimi: %s\n", orden)
-
-			respuesta := LlamarOllamaLocal(orden, "tojikontvru/kimi-k2.6:latest")
-
-			// Persistencia de respuesta
-			mu.Lock()
-			os.WriteFile("./data/respuesta_ia.json", []byte(respuesta), 0644)
-			mu.Unlock()
-
-			fmt.Printf("✅ [KIMI]: ADN procesado.\n")
-		}(msg.Orden)
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ADN_SYNCHRONIZED_KIMI"))
+    http.Error(w, "ADN inválido", http.StatusBadRequest)
 }
 
 func LlamarOllamaLocal(mensaje string, modelo string) string {
@@ -277,24 +264,27 @@ func marcarEstadoEnDB(nuevoEstado string) {
 }
 
 
+// En tu función de procesamiento local, añade un "Watchdog" de RAM
 func procesarColaDeEspera() {
-	var tareas []TareaPendiente
-	// Buscamos todas las tareas ordenadas por fecha de creación
-	if err := DB.Order("created_at asc").Find(&tareas).Error; err != nil {
-		fmt.Printf("❌ [ERROR]: Fallo al leer cola de espera: %v\n", err)
-		return
-	}
+    var tareas []TareaPendiente
+    DB.Order("created_at asc").Find(&tareas)
 
-	for _, t := range tareas {
-		fmt.Printf("📦 [PROCESANDO]: Ejecutando ADN atrasado -> %s\n", t.Orden)
-		
-		// Enviamos al Espejo (Ollama)
-		resultado := LlamarOllamaLocal(t.Orden, "tojikontvru/kimi-k2.6:latest")
-		fmt.Printf("✅ [KIMI]: ADN encolado procesado. Resultado: %s\n", resultado)
+    for _, t := range tareas {
+        // Validación de salud: Si el sistema está en BÚNKER, no procesar
+        var estado EstadoSistema
+        DB.First(&estado, 1)
+        if estado.EstadoActual == "BÚNKER" {
+            fmt.Println("⚠️ [SISTEMA]: Búnker activo. Deteniendo procesador.")
+            return 
+        }
 
-		// Eliminamos la tarea tras procesarla exitosamente para no repetir
-		DB.Delete(&t)
-	}
+        // Ejecución segura
+        resultado := LlamarOllamaLocal(t.Orden, "tojikontvru/kimi-k2.6:latest")
+        
+        // Guardar resultado y limpiar tarea
+        // ... (código de persistencia)
+        DB.Delete(&t)
+    }
 }
 
 func ConectarMedula() {

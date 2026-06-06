@@ -1,4 +1,4 @@
-module github.com/MaxAltamirano/geochat-cortex
+module geochat-cortex
 
 go 1.26.3
 

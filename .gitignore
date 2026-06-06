@@ -1,3 +1,4 @@
 main
 data/
 .env
+cortex.log

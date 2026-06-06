@@ -7,89 +7,123 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"sync"
 	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-// Estructura de Médula para el Córtex en Render
+// Estructura de Médula para persistencia
 type TareaIA struct {
-	ID        uint   `gorm:"primaryKey"`
-	Orden     string `json:"orden"`
-	Respuesta string `json:"respuesta"`
-	Estado    string `json:"estado"` // PENDIENTE, PROCESADO
-	Timestamp time.Time
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Orden     string    `json:"orden"`
+	Respuesta string    `json:"respuesta"`
+	Estado    string    `json:"estado"`
+	Logs      string    `json:"logs"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Estructura para Grafo (Simplificado para navegación de módulos)
+type NodoModulo struct {
+	Nombre       string
+	Estado       string
+	Dependencias []*NodoModulo
+}
+
+type GrafoCortex struct {
+	Raiz *NodoModulo
+	sync.RWMutex
+}
+
+// Cache Dinámica en RAM
+var CortexCache = struct {
+	ADN_Maestro map[string]interface{}
+	Trilogia    string
+	Grafo       *GrafoCortex
+	sync.RWMutex
+}{
+	ADN_Maestro: make(map[string]interface{}),
+	Grafo:       &GrafoCortex{Raiz: &NodoModulo{Nombre: "ROOT"}},
 }
 
 var DB *gorm.DB
 
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
-	db, _ := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatal("Error conectando a DB:", err)
+	}
 	DB = db
 	DB.AutoMigrate(&TareaIA{})
 
-	// Rutas de Inteligencia Distribuida
-	http.HandleFunc("/api/ordenar", recibirOrden)        // UI -> Córtex
-	http.HandleFunc("/api/consultar", entregarResultado) // Linux Local -> Córtex
+	http.HandleFunc("/api/ordenar", recibirOrden)
+	http.HandleFunc("/api/consultar", entregarResultado)
+	http.HandleFunc("/api/configurar", configurarNodo) // Punto de inyección de ADN
 
+	log.Printf("🚀 [CÓRTEX]: Online en puerto %s", os.Getenv("PORT"))
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), nil))
 }
 
+// 1. Inyección de ADN (vía despertar.sh)
+func configurarNodo(w http.ResponseWriter, r *http.Request) {
+	var config struct {
+		ADN_Maestro map[string]interface{} `json:"adn_maestro"`
+		Trilogia    string                 `json:"trilogia"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	CortexCache.Lock()
+	CortexCache.ADN_Maestro = config.ADN_Maestro
+	CortexCache.Trilogia = config.Trilogia
+	CortexCache.Unlock()
+
+	log.Printf("✨ [CÓRTEX]: ADN inyectado. Consciencia cargada.")
+	w.WriteHeader(http.StatusOK)
+}
+
+// 2. Procesamiento Inteligente
 func recibirOrden(w http.ResponseWriter, r *http.Request) {
 	var t TareaIA
 	json.NewDecoder(r.Body).Decode(&t)
 	t.Estado = "PENDIENTE"
 	DB.Create(&t)
-	// AQUÍ: Render llama a la API de Ollama (externa o propia) para procesar
 	go procesarConIA(&t)
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func procesarConIA(t *TareaIA) {
-	fmt.Printf("🧠 [CÓRTEX]: Iniciando inferencia para tarea %d...\n", t.ID)
+	// Acceso rápido a Identidad
+	CortexCache.RLock()
+	adn := CortexCache.ADN_Maestro
+	trilogia := CortexCache.Trilogia
+	CortexCache.RUnlock()
 
-	// 1. Preparar la llamada a Groq
-	url := "https://api.groq.com/openai/v1/chat/completions"
-	apiKey := os.Getenv("GROQ_API_KEY") // Asegúrate de tener esta variable en Render
+	log.Printf("🧠 [CÓRTEX]: Iniciando tarea con ADN: %v | Regla: %s", adn["nodo_id"], trilogia)
 
-	payload := map[string]interface{}{
-		"model": "llama3-8b-8192", // O el modelo que prefieras
-		"messages": []map[string]string{
-			{"role": "user", "content": t.Orden},
-		},
-	}
-	payloadBytes, _ := json.Marshal(payload)
+	// Aquí llamarías a la IA pasando el ADN como contexto del sistema
+	ejecutarModularizacion(t, "modulo_comunitario_gps", "package main\nimport \"fmt\"\nfunc main() { fmt.Println('GPS activo') }")
+}
 
-	// 2. Ejecutar inferencia
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
+func ejecutarModularizacion(t *TareaIA, nombre string, codigo string) {
+	dir := fmt.Sprintf("./sandbox/%d/%s", t.ID, nombre)
+	os.MkdirAll(dir, 0755)
+	ruta := fmt.Sprintf("%s/main.go", dir)
+	os.WriteFile(ruta, []byte(codigo), 0644)
 
-	resp, err := client.Do(req)
-	var respuestaFinal string
+	cmd := exec.Command("go", "build", "-o", "binario", ruta)
+	var out bytes.Buffer
+	cmd.Stderr = &out
 
-	if err != nil {
-		respuestaFinal = fmt.Sprintf("❌ Error de comunicación con Groq: %v", err)
+	if err := cmd.Run(); err != nil {
+		DB.Model(&t).Updates(TareaIA{Logs: out.String(), Estado: "ERROR_COMPILACION"})
 	} else {
-		defer resp.Body.Close()
-		// Aquí deberías parsear el JSON de respuesta de Groq
-		// Por brevedad, extraemos el contenido simulando el acceso al campo 'choices'
-		respuestaFinal = "Respuesta desde Groq para: " + t.Orden
-	}
-
-	// 3. Persistir en la Médula (Postgres)
-	err = DB.Model(&t).Updates(TareaIA{
-		Respuesta: respuestaFinal,
-		Estado:    "PROCESADO",
-	}).Error
-
-	if err != nil {
-		log.Printf("❌ [MÉDULA]: Fallo crítico persistiendo tarea %d: %v", t.ID, err)
-	} else {
-		log.Printf("✅ [CÓRTEX]: Tarea %d finalizada con éxito.", t.ID)
+		DB.Model(&t).Update("Estado", "PROCESADO")
 	}
 }
 

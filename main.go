@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"gorm.io/driver/postgres"
+	//"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -51,13 +51,13 @@ var CortexCache = struct {
 var DB *gorm.DB
 
 func main() {
-	dsn := os.Getenv("DATABASE_URL")
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatal("Error conectando a DB:", err)
-	}
-	DB = db
-	DB.AutoMigrate(&TareaIA{})
+	//dsn := os.Getenv("DATABASE_URL")
+	//db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	//if err != nil {
+	//	log.Fatal("Error conectando a DB:", err)
+	//}
+	//DB = db
+	//DB.AutoMigrate(&TareaIA{})
 
 	http.HandleFunc("/api/ordenar", recibirOrden)
 	http.HandleFunc("/api/consultar", entregarResultado)

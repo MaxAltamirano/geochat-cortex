@@ -1,6 +1,15 @@
+# --- Dependencias y librerías externas ---
 vendor/
-main
-sandbox/
-.env
-vendor/
+
+# --- Logs y archivos de ejecución ---
 cortex.log
+*.log
+*.tmp
+
+# --- Entorno y configuración local ---
+.env
+.DS_Store
+
+# --- Binarios compilados (para no subir el ejecutable) ---
+main
+*.exe

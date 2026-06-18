@@ -1,4 +1,4 @@
+vendor/
 main
-data/
+sandbox/
 .env
-cortex.log
